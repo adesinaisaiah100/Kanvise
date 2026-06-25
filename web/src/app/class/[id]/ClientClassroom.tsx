@@ -2,13 +2,14 @@
 
 import { LiveKitRoom, RoomAudioRenderer } from "@livekit/components-react";
 import { useEffect, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import ClassroomLayout from "@/components/classroom/ClassroomLayout";
 
 function ClassroomConnection({ roomId }: { roomId: string }) {
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const searchParams = useSearchParams();
+  const router = useRouter();
   const username = searchParams.get("username") || "Student-" + Math.floor(Math.random() * 1000);
   const isHost = searchParams.get("isHost") === "true";
 
@@ -47,6 +48,7 @@ function ClassroomConnection({ roomId }: { roomId: string }) {
       connect={!!token} // Only try connecting if we actually have a valid token
       data-lk-theme="default"
       className="h-screen w-full flex flex-col bg-background text-foreground overflow-hidden"
+      onDisconnected={() => router.push("/")}
     >
       {/* Renders audio tracks of other participants */}
       <RoomAudioRenderer />

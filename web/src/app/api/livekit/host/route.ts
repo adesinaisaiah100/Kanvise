@@ -35,6 +35,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, action: "mute", identity });
     }
 
+    if (action === "lowerHand") {
+      await roomService.updateParticipant(room, identity, {
+        attributes: { handRaised: "" }
+      });
+      return NextResponse.json({ success: true, action: "lowerHand", identity });
+    }
+
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   } catch (error: any) {
     console.error("LiveKit Host Action Error:", error);

@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "@livekit/components-styles";
-import "tldraw/tldraw.css";
+import "@excalidraw/excalidraw/index.css";
 import "./globals.css";
+import { Toaster } from "sonner";
 
 const jakartaSans = Plus_Jakarta_Sans({
   variable: "--font-jakarta",
@@ -25,6 +26,7 @@ export default function RootLayout({
         className={`${jakartaSans.variable} antialiased`}
       >
         {children}
+        <Toaster position="bottom-right" richColors />
       </body>
     </html>
   );

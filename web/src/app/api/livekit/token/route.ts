@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
     canPublish: true,
     canSubscribe: true,
     canPublishData: true,
+    canUpdateOwnMetadata: true,
     // roomAdmin allows the user to kick/mute others directly from the frontend SDK
     roomAdmin: isHost,
   });

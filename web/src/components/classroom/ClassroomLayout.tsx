@@ -8,14 +8,17 @@ import {
   useTracks,
   VideoTrack,
   TrackToggle,
+  useLocalParticipant,
 } from "@livekit/components-react";
-import { ConnectionState, Track } from "livekit-client";
+import { ConnectionState, Track, RoomEvent, Participant } from "livekit-client";
 import { useState, useEffect } from "react";
+import { toast } from "sonner";
 import AudioVideoControls from "./AudioVideoControls";
 import ScreenShare from "./ScreenShare";
 import ChatBox from "./ChatBox";
 import VideoPiP from "./VideoPiP";
 import ParticipantsPanel from "./ParticipantsPanel";
+import CollaborativeWhiteboard from "./CollaborativeWhiteboard";
 import {
   Hand,
   MessageSquare,
@@ -32,20 +35,89 @@ export default function ClassroomLayout({ isHost }: { isHost: boolean }) {
   const connectionState = useConnectionState();
   const participants = useParticipants();
   const screenShareTracks = useTracks([Track.Source.ScreenShare]);
+  const { localParticipant } = useLocalParticipant();
   
-  const [activePanel, setActivePanel] = useState<"whiteboard" | "screenshare">("whiteboard");
   const [openSidebar, setOpenSidebar] = useState<"chat" | "participants" | null>(null);
-  const [handRaised, setHandRaised] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [isEnding, setIsEnding] = useState(false);
+
+  const handleEndClass = async () => {
+    setIsEnding(true);
+    try {
+      await fetch("/api/livekit/end-room", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId: room.name }),
+      });
+      room.disconnect();
+    } catch (e) {
+      console.error("Failed to end class", e);
+      toast.error("Failed to end class");
+    } finally {
+      setIsEnding(false);
+    }
+  };
+
+  const handleLeaveBtnClick = () => {
+    if (isHost) {
+      setShowLeaveModal(true);
+    } else {
+      room.disconnect();
+    }
+  };
 
   const isConnected = connectionState === ConnectionState.Connected;
+  const isHandRaised = !!localParticipant?.attributes?.handRaised;
 
-  // Auto-switch to Screen Share when someone starts sharing
-  useEffect(() => {
-    if (screenShareTracks.length > 0 && activePanel !== "screenshare") {
-      setActivePanel("screenshare");
+  const toggleHandRaise = () => {
+    if (!localParticipant) return;
+    localParticipant.setAttributes({ handRaised: isHandRaised ? "" : Date.now().toString() });
+  };
+
+  const isTutorPresent = isHost || participants.some((p) => {
+    try {
+      return JSON.parse(p.metadata || "{}").isHost === true;
+    } catch (e) {
+      return false;
     }
-  }, [screenShareTracks.length, activePanel]);
+  });
+
+  // Room Events for Notifications
+  useEffect(() => {
+    if (!room) return;
+
+    const handleParticipantConnected = (participant: Participant) => {
+      // Only host sees join/leave, and only if room has < 15 people
+      if (isHost && room.participants.size < 15) {
+        toast.success(`${participant.name || participant.identity} joined`);
+      }
+    };
+
+    const handleParticipantDisconnected = (participant: Participant) => {
+      if (isHost && room.participants.size < 15) {
+        toast(`${participant.name || participant.identity} left`);
+      }
+    };
+
+    const handleAttributesChanged = (changed: Record<string, string>, participant: Participant) => {
+      if (isHost && changed.handRaised && changed.handRaised !== "0" && changed.handRaised !== "") {
+        toast.info(`${participant.name || participant.identity} raised their hand!`);
+      }
+    };
+
+    room.on(RoomEvent.ParticipantConnected, handleParticipantConnected);
+    room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
+    room.on(RoomEvent.ParticipantAttributesChanged, handleAttributesChanged);
+
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, handleParticipantConnected);
+      room.off(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
+      room.off(RoomEvent.ParticipantAttributesChanged, handleAttributesChanged);
+    };
+  }, [room, isHost]);
+
+
 
   // Timer
   useEffect(() => {
@@ -82,28 +154,7 @@ export default function ClassroomLayout({ isHost }: { isHost: boolean }) {
           </div>
         </div>
 
-        {/* Centre: Canvas Tabs */}
-        <div className="hidden md:flex items-center bg-[#f5f3f2] p-1 rounded-lg border border-[#e4e2e1]">
-          <button
-            onClick={() => setActivePanel("whiteboard")}
-            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-[12px] font-semibold transition-all
-              ${activePanel === "whiteboard" ? "bg-white text-[#180d62] shadow-sm" : "text-[#787582] hover:text-[#180d62]"}`}
-          >
-            <PenLine size={14} />
-            Whiteboard
-          </button>
-          <button
-            onClick={() => setActivePanel("screenshare")}
-            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-[12px] font-semibold transition-all
-              ${activePanel === "screenshare" ? "bg-white text-[#180d62] shadow-sm" : "text-[#787582] hover:text-[#180d62]"}`}
-          >
-            <MonitorPlay size={14} />
-            Screen Share
-            {screenShareTracks.length > 0 && (
-              <span className="w-2 h-2 rounded-full bg-green-500 ml-1 animate-pulse" />
-            )}
-          </button>
-        </div>
+
 
         {/* Right: timer + role + leave */}
         <div className="flex items-center gap-4 flex-1 justify-end">
@@ -117,12 +168,13 @@ export default function ClassroomLayout({ isHost }: { isHost: boolean }) {
             <span className="font-semibold">{formatTime(elapsedTime)}</span>
           </div>
           
-          <DisconnectButton
+          <button
+            onClick={handleLeaveBtnClick}
             className="flex items-center gap-1.5 bg-[#ba1a1a]/10 hover:bg-[#ba1a1a]/20 text-[#ba1a1a] px-4 py-2 rounded-lg text-[13px] font-bold transition-all ml-2"
           >
             <LogOut size={15} />
             <span className="hidden md:inline">Leave</span>
-          </DisconnectButton>
+          </button>
         </div>
       </header>
 
@@ -133,37 +185,30 @@ export default function ClassroomLayout({ isHost }: { isHost: boolean }) {
           <div className="flex-1 relative bg-black">
             <VideoPiP />
             
-            {activePanel === "whiteboard" && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[#f5f3f2]">
-                <div className="w-16 h-16 rounded-2xl bg-[#2e2877]/8 flex items-center justify-center">
-                  <PenLine size={28} className="text-[#180d62]/40" />
-                </div>
-                <div className="text-center">
-                  <p className="text-[15px] font-semibold text-[#180d62]/50">Whiteboard is loading...</p>
-                  <p className="text-[13px] text-[#787582] mt-1">tldraw collaborative whiteboard will appear here</p>
-                </div>
+            <div className={`absolute inset-0 ${screenShareTracks.length > 0 ? "hidden pointer-events-none" : "block"}`}>
+              <CollaborativeWhiteboard />
+            </div>
+
+            {screenShareTracks.length > 0 && (
+              <div className="absolute inset-0 flex items-center justify-center overflow-hidden z-20 bg-black">
+                <VideoTrack 
+                  trackRef={screenShareTracks[0]} 
+                  className="w-full h-full object-contain" 
+                />
               </div>
             )}
-            {activePanel === "screenshare" && (
-              <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
-                {screenShareTracks.length > 0 ? (
-                  <VideoTrack 
-                    trackRef={screenShareTracks[0]} 
-                    className="w-full h-full object-contain" 
-                  />
-                ) : (
-                  <div className="flex flex-col items-center justify-center gap-4">
-                    <div className="w-16 h-16 rounded-2xl bg-white/10 flex items-center justify-center">
-                      <MonitorPlay size={28} className="text-white/40" />
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[15px] font-semibold text-white/50">No screen being shared</p>
-                      <p className="text-[13px] text-white/30 mt-1">
-                        {isHost ? "Use the Share Screen button below to begin" : "Waiting for host to share screen"}
-                      </p>
-                    </div>
+
+            {!isTutorPresent && (
+              <div className="absolute inset-0 z-30 flex flex-col items-center justify-center backdrop-blur-md bg-black/40">
+                <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center text-center max-w-sm mx-4">
+                  <div className="w-16 h-16 rounded-full bg-[#f5f3f2] flex items-center justify-center mb-4">
+                    <Clock className="text-[#180d62]" size={32} />
                   </div>
-                )}
+                  <h2 className="text-xl font-bold text-[#180d62] mb-2">Waiting for Tutor</h2>
+                  <p className="text-[#787582] text-[13px] leading-relaxed">
+                    The tutor has disconnected or hasn't joined the class yet. Please wait, they should return shortly.
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -230,8 +275,13 @@ export default function ClassroomLayout({ isHost }: { isHost: boolean }) {
           <AudioVideoControls />
           
           {isHost && (
-            <TrackToggle
-              source={Track.Source.ScreenShare}
+            <button
+              onClick={async () => {
+                if (localParticipant) {
+                  const isSharing = screenShareTracks.length > 0;
+                  await localParticipant.setScreenShareEnabled(!isSharing);
+                }
+              }}
               className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-[13px] font-semibold transition-all border
                 ${screenShareTracks.length > 0
                   ? "bg-[#994704] text-white border-[#994704] shadow-md"
@@ -240,20 +290,20 @@ export default function ClassroomLayout({ isHost }: { isHost: boolean }) {
             >
               <MonitorPlay size={16} />
               <span className="hidden md:inline">{screenShareTracks.length > 0 ? "Stop Share" : "Share Screen"}</span>
-            </TrackToggle>
+            </button>
           )}
 
           {!isHost && (
             <button
-              onClick={() => setHandRaised(!handRaised)}
+              onClick={toggleHandRaise}
               className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-[13px] font-semibold transition-all border
-                ${handRaised
+                ${isHandRaised
                   ? "bg-[#994704] text-white border-[#994704] shadow-md"
                   : "bg-[#f5f3f2] hover:bg-[#e4e2e1] text-[#180d62] border-[#e4e2e1]"
                 }`}
             >
               <Hand size={16} />
-              <span className="hidden md:inline">{handRaised ? "Lower Hand" : "Raise Hand"}</span>
+              <span className="hidden md:inline">{isHandRaised ? "Lower Hand" : "Raise Hand"}</span>
             </button>
           )}
         </div>
@@ -289,6 +339,42 @@ export default function ClassroomLayout({ isHost }: { isHost: boolean }) {
           </button>
         </div>
       </footer>
+
+      {/* ── LEAVE MODAL ─────────── */}
+      {showLeaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl flex flex-col items-center text-center">
+            <div className="w-12 h-12 rounded-full bg-[#ba1a1a]/10 flex items-center justify-center mb-4 text-[#ba1a1a]">
+              <LogOut size={24} />
+            </div>
+            <h2 className="text-xl font-bold text-[#180d62] mb-2">Leave Classroom</h2>
+            <p className="text-[#787582] text-[13px] mb-6">
+              Do you want to just leave temporarily, or end the class for everyone?
+            </p>
+            <div className="flex flex-col gap-3 w-full">
+              <button 
+                onClick={() => room.disconnect()}
+                className="w-full py-2.5 bg-[#f5f3f2] hover:bg-[#e4e2e1] text-[#180d62] font-semibold rounded-lg transition-colors"
+              >
+                Leave Class
+              </button>
+              <button 
+                onClick={handleEndClass}
+                disabled={isEnding}
+                className="w-full py-2.5 bg-[#ba1a1a] hover:bg-[#ba1a1a]/90 text-white font-semibold rounded-lg transition-colors flex items-center justify-center"
+              >
+                {isEnding ? "Ending..." : "End Class for All"}
+              </button>
+              <button 
+                onClick={() => setShowLeaveModal(false)}
+                className="w-full py-2.5 text-[#787582] hover:text-[#1b1c1c] font-medium text-sm transition-colors mt-2"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
